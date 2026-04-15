@@ -1,0 +1,69 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      globalcors:
+        corsConfigurations:
+          '[/**]':
+            allowedOriginPatterns: "*"
+            allowedMethods: "*"
+            allowedHeaders: "*"
+            allowCredentials: true
+      routes:
+        - id: order-management
+          uri: http://order-management-service:8081
+          predicates:
+            - Path=/api/orders/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 1000
+                redis-rate-limiter.burstCapacity: 2000
+
+        - id: trade-execution
+          uri: http://trade-execution-service:8083
+          predicates:
+            - Path=/api/trades/**
+
+        - id: reference-data
+          uri: http://reference-data-service:8087
+          predicates:
+            - Path=/api/ref-data/**
+
+        - id: market-data
+          uri: http://market-data-service:8084
+          predicates:
+            - Path=/api/market-data/**
+
+        - id: matching-engine
+          uri: http://matching-engine-service:8082
+          predicates:
+            - Path=/api/matching/**
+
+        - id: options-pricing
+          uri: http://options-pricing-service:8086
+          predicates:
+            - Path=/api/options/**
+
+        - id: websocket-gateway
+          uri: http://websocket-gateway-service:8085
+          predicates:
+            - Path=/ws/**
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,gateway
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    org.springframework.cloud.gateway: INFO
+    com.oms: DEBUG
