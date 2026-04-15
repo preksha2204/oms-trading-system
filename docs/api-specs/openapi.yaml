@@ -1,0 +1,665 @@
+openapi: 3.0.3
+info:
+  title: OMS Trading System API
+  description: |
+    Capital Market Order Management System REST API.
+    All endpoints are routed through the API Gateway at port **8080**.
+    WebSocket streaming is available at `ws://localhost:8085/ws` via STOMP/SockJS.
+  version: 1.0.0
+  contact:
+    name: OMS Engineering Team
+    email: oms-dev@example.com
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development (via API Gateway)
+  - url: http://localhost:8081
+    description: Order Management Service (direct)
+  - url: http://localhost:8082
+    description: Matching Engine Service (direct)
+  - url: http://localhost:8083
+    description: Trade Execution Service (direct)
+  - url: http://localhost:8087
+    description: Reference Data Service (direct)
+
+tags:
+  - name: Orders
+    description: Order submission and lifecycle management
+  - name: Trades
+    description: Trade query and blotter
+  - name: Matching Engine
+    description: Order book and latency monitoring
+  - name: Reference Data
+    description: Security master and customer master
+  - name: Market Data
+    description: Live quote data
+  - name: Options Pricing
+    description: Black-Scholes pricing results
+
+# ─────────────────────────────────────────────────────────────────
+paths:
+
+  # ═══════════════════ ORDERS ════════════════════════════════════
+
+  /api/orders:
+    post:
+      tags: [Orders]
+      summary: Submit a new order
+      description: |
+        Submits a new limit or market order to the OMS.
+        The order is validated, enriched, stored in-memory, persisted async,
+        and published to Kafka for matching.
+      operationId: submitOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+            examples:
+              limitBuy:
+                summary: Limit Buy Order
+                value:
+                  clOrdId: "ORD-2024-001"
+                  symbol: "AAPL"
+                  side: "BUY"
+                  orderType: "LIMIT"
+                  quantity: 1000
+                  price: 150.00
+              limitSell:
+                summary: Limit Sell Order
+                value:
+                  clOrdId: "ORD-2024-002"
+                  symbol: "AAPL"
+                  side: "SELL"
+                  orderType: "LIMIT"
+                  quantity: 500
+                  price: 151.00
+      responses:
+        '200':
+          description: Order accepted and processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          description: Validation error (missing fields, invalid price/qty)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+
+    get:
+      tags: [Orders]
+      summary: Get all orders (in-memory)
+      description: Returns all orders currently held in the in-memory order store.
+      operationId: getAllOrders
+      responses:
+        '200':
+          description: List of orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+
+  /api/orders/{orderId}:
+    get:
+      tags: [Orders]
+      summary: Get order by ID
+      operationId: getOrderById
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            example: 7481234567890123
+      responses:
+        '200':
+          description: Order found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          description: Order not found
+
+  /api/orders/by-cl-ord-id/{clOrdId}:
+    get:
+      tags: [Orders]
+      summary: Get order by client order ID
+      operationId: getOrderByClOrdId
+      parameters:
+        - name: clOrdId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "ORD-2024-001"
+      responses:
+        '200':
+          description: Order found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          description: Order not found
+
+  /api/orders/stats:
+    get:
+      tags: [Orders]
+      summary: In-memory order store statistics
+      operationId: getOrderStats
+      responses:
+        '200':
+          description: Store statistics
+          content:
+            application/json:
+              example:
+                totalInMemory: 42500
+                activeOrders: 1230
+
+  # ═══════════════════ TRADES ════════════════════════════════════
+
+  /api/trades/symbol/{symbol}:
+    get:
+      tags: [Trades]
+      summary: Get trades by symbol (paginated)
+      operationId: getTradesBySymbol
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "AAPL"
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: size
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Paginated list of trades
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TradePage'
+
+  /api/trades/symbol/{symbol}/range:
+    get:
+      tags: [Trades]
+      summary: Get trades by symbol and time range
+      operationId: getTradesByTimeRange
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+            example: "2024-06-01T09:00:00Z"
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+            example: "2024-06-01T17:00:00Z"
+      responses:
+        '200':
+          description: List of trades in time range
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Trade'
+
+  /api/trades/stats:
+    get:
+      tags: [Trades]
+      summary: Trade persistence queue statistics
+      operationId: getTradeStats
+      responses:
+        '200':
+          description: Queue stats
+          content:
+            application/json:
+              example:
+                persistQueueSize: 4500
+
+  # ═══════════════════ MATCHING ENGINE ═══════════════════════════
+
+  /api/matching/books:
+    get:
+      tags: [Matching Engine]
+      summary: Get all active order books
+      operationId: getAllOrderBooks
+      responses:
+        '200':
+          description: Map of symbol to order book summary
+          content:
+            application/json:
+              example:
+                AAPL:
+                  bestBid: 149.90
+                  bestAsk: 150.10
+                  bidLevels: 5
+                  askLevels: 7
+                MSFT:
+                  bestBid: 309.80
+                  bestAsk: 310.20
+                  bidLevels: 3
+                  askLevels: 4
+
+  /api/matching/books/{symbol}:
+    get:
+      tags: [Matching Engine]
+      summary: Get order book for a specific symbol
+      operationId: getOrderBook
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "AAPL"
+      responses:
+        '200':
+          description: Order book summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderBookSummary'
+        '404':
+          description: No order book for this symbol
+
+  /api/matching/latency:
+    get:
+      tags: [Matching Engine]
+      summary: Get tick-to-trade latency statistics
+      operationId: getLatencyStats
+      responses:
+        '200':
+          description: Latency metrics
+          content:
+            application/json:
+              example:
+                avgLatencyMicros: 248.73
+                avgLatencyMillis: 0.25
+                totalOrders: 500000
+
+  # ═══════════════════ REFERENCE DATA ════════════════════════════
+
+  /api/ref-data/symbols/validate:
+    get:
+      tags: [Reference Data]
+      summary: Validate if a symbol is active on the security master
+      operationId: validateSymbol
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "AAPL"
+      responses:
+        '200':
+          description: true if valid, false if unknown
+          content:
+            application/json:
+              schema:
+                type: boolean
+              example: true
+
+  /api/ref-data/symbols:
+    get:
+      tags: [Reference Data]
+      summary: Get all active securities
+      operationId: getAllSecurities
+      responses:
+        '200':
+          description: List of active security master records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SecurityMaster'
+
+  /api/ref-data/symbols/{symbol}:
+    get:
+      tags: [Reference Data]
+      summary: Get security master record by symbol
+      operationId: getSecurity
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "AAPL"
+      responses:
+        '200':
+          description: Security master record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityMaster'
+        '404':
+          description: Symbol not found
+
+  /api/ref-data/symbols/{symbol}/options:
+    get:
+      tags: [Reference Data]
+      summary: Get all option instruments for an underlying
+      operationId: getOptions
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "AAPL"
+      responses:
+        '200':
+          description: List of option security master records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SecurityMaster'
+
+  /api/ref-data/customers/{customerId}:
+    get:
+      tags: [Reference Data]
+      summary: Get customer master record
+      operationId: getCustomer
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "INST_001"
+      responses:
+        '200':
+          description: Customer master record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerMaster'
+        '404':
+          description: Customer not found
+
+  /api/ref-data/cache/reload:
+    put:
+      tags: [Reference Data]
+      summary: Reload security master cache from database
+      operationId: reloadCache
+      responses:
+        '200':
+          description: Cache reloaded
+          content:
+            application/json:
+              example:
+                status: "reloaded"
+
+# ─────────────────────────────────────────────────────────────────
+components:
+  schemas:
+
+    OrderRequest:
+      type: object
+      required: [clOrdId, symbol, side, orderType, quantity, price]
+      properties:
+        clOrdId:
+          type: string
+          description: Unique client order identifier
+          example: "ORD-2024-001"
+        symbol:
+          type: string
+          description: Trading symbol (must exist in security master)
+          example: "AAPL"
+        customerId:
+          type: string
+          description: Customer identifier
+          example: "INST_001"
+        side:
+          type: string
+          enum: [BUY, SELL]
+        orderType:
+          type: string
+          enum: [LIMIT, MARKET]
+        quantity:
+          type: number
+          format: double
+          minimum: 0.0001
+          example: 1000
+        price:
+          type: number
+          format: double
+          minimum: 0.0001
+          example: 150.00
+
+    Order:
+      type: object
+      properties:
+        orderId:
+          type: integer
+          format: int64
+          description: Snowflake ID — unique, time-sortable
+          example: 7481234567890123
+        clOrdId:
+          type: string
+          example: "ORD-2024-001"
+        symbol:
+          type: string
+          example: "AAPL"
+        customerId:
+          type: string
+          example: "INST_001"
+        side:
+          type: string
+          enum: [BUY, SELL]
+        orderType:
+          type: string
+          enum: [LIMIT, MARKET]
+        quantity:
+          type: number
+          format: double
+          example: 1000
+        filledQty:
+          type: number
+          format: double
+          example: 600
+        price:
+          type: number
+          format: double
+          example: 150.00
+        status:
+          type: string
+          enum: [NEW, PARTIAL, FILLED, CANCELLED, REJECTED, PENDING]
+        fixSessionId:
+          type: string
+          example: "FIX.4.4:OMS_SERVER->TRADING_CLIENT"
+        receivedAt:
+          type: string
+          format: date-time
+
+    Trade:
+      type: object
+      properties:
+        tradeId:
+          type: string
+          format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        buyOrderId:
+          type: integer
+          format: int64
+        sellOrderId:
+          type: integer
+          format: int64
+        symbol:
+          type: string
+          example: "AAPL"
+        quantity:
+          type: number
+          format: double
+          example: 500
+        price:
+          type: number
+          format: double
+          description: Always the resting order price
+          example: 149.95
+        execId:
+          type: string
+          example: "X-1704067200000000001"
+        executedAt:
+          type: string
+          format: date-time
+
+    TradePage:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/Trade'
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+        size:
+          type: integer
+        number:
+          type: integer
+
+    OrderBookSummary:
+      type: object
+      properties:
+        symbol:
+          type: string
+        bestBid:
+          type: number
+          format: double
+          nullable: true
+        bestAsk:
+          type: number
+          format: double
+          nullable: true
+        bidLevels:
+          type: integer
+        askLevels:
+          type: integer
+
+    SecurityMaster:
+      type: object
+      properties:
+        securityId:
+          type: integer
+          format: int64
+        symbol:
+          type: string
+        isin:
+          type: string
+        description:
+          type: string
+        exchange:
+          type: string
+        currency:
+          type: string
+        lotSize:
+          type: number
+        tickSize:
+          type: number
+        isActive:
+          type: boolean
+        optionType:
+          type: string
+          enum: [C, P]
+          nullable: true
+        strikePrice:
+          type: number
+          nullable: true
+        expiryDate:
+          type: string
+          format: date
+          nullable: true
+        underlyingSymbol:
+          type: string
+          nullable: true
+        volatility:
+          type: number
+
+    CustomerMaster:
+      type: object
+      properties:
+        customerId:
+          type: string
+        name:
+          type: string
+        accountType:
+          type: string
+          enum: [RETAIL, INSTITUTIONAL, PROP]
+        maxOrderQty:
+          type: number
+        maxOrderValue:
+          type: number
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+
+# ─────────────────────────────────────────────────────────────────
+# WebSocket Endpoints (STOMP over SockJS)
+# ─────────────────────────────────────────────────────────────────
+# Connect:  ws://localhost:8085/ws  (SockJS fallback supported)
+#
+# Subscribe topics:
+#   /topic/orders             — all order updates (OrderDTO)
+#   /topic/trades             — all trade executions (TradeDTO)
+#   /topic/trades/{symbol}    — trades for a specific symbol
+#   /topic/market-data        — all market data events (MarketDataEvent)
+#   /topic/market-data/{sym}  — quotes for a specific symbol
+#   /topic/options            — all option pricing updates (OptionPriceDTO)
+#   /topic/options/{symbol}   — pricing for a specific option
+#   /topic/executions         — all FIX execution reports
+#   /topic/executions/{clOrdId} — reports for a specific order

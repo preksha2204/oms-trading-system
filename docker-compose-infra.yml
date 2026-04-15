@@ -1,0 +1,148 @@
+version: '3.9'
+
+# ═══════════════════════════════════════════════════════════════
+# OMS Infrastructure Only — Kafka, Zookeeper, MySQL
+# Use this to start infra independently before running services:
+#   docker-compose -f docker-compose-infra.yml up -d
+# ═══════════════════════════════════════════════════════════════
+
+networks:
+  oms-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  kafka_data:
+  zookeeper_data:
+
+services:
+
+  # ─── Zookeeper ────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: oms-zookeeper
+    networks: [oms-net]
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Kafka Broker ─────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka
+    container_name: oms-kafka
+    networks: [oms-net]
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"      # external (host)
+      - "29092:29092"    # internal (container-to-container)
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 12
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_RETENTION_BYTES: 10737418240    # 10 GB
+      KAFKA_MESSAGE_MAX_BYTES: 10485760          # 10 MB
+      KAFKA_SOCKET_SEND_BUFFER_BYTES: 102400
+      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 102400
+      KAFKA_SOCKET_REQUEST_MAX_BYTES: 104857600
+      KAFKA_LOG_FLUSH_INTERVAL_MESSAGES: 10000
+      KAFKA_LOG_FLUSH_INTERVAL_MS: 1000
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # ─── Kafka UI (monitoring) ────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: oms-kafka-ui
+    networks: [oms-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "9093:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: oms-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      AUTH_TYPE: "DISABLED"
+    restart: unless-stopped
+
+  # ─── MySQL 8 ──────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: oms-mysql
+    networks: [oms-net]
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-oms_root_pass}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-oms_db}
+      MYSQL_USER: ${MYSQL_USER:-oms_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-oms_pass}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    command: >
+      --innodb-buffer-pool-size=2G
+      --innodb-log-file-size=512M
+      --innodb-flush-log-at-trx-commit=2
+      --innodb-flush-method=O_DIRECT
+      --max-connections=500
+      --max-allowed-packet=64M
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --slow-query-log=1
+      --slow-query-log-file=/var/log/mysql/slow.log
+      --long-query-time=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
+             "-u", "${MYSQL_USER:-oms_user}",
+             "-p${MYSQL_PASSWORD:-oms_pass}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ─── MySQL Admin UI ───────────────────────────────────────────
+  adminer:
+    image: adminer:latest
+    container_name: oms-adminer
+    networks: [oms-net]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8888:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: mysql
+      ADMINER_DESIGN: dracula
+    restart: unless-stopped
