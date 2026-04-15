@@ -1,0 +1,6 @@
+FROM eclipse-temurin:17-jre-alpine
+WORKDIR /app
+COPY target/*.jar app.jar
+EXPOSE 8081
+ENV JAVA_OPTS="-XX:+UseZGC -Xmx4g -Xms1g -XX:+AlwaysPreTouch"
+ENTRYPOINT ["sh","-c","java $JAVA_OPTS -jar app.jar"]
