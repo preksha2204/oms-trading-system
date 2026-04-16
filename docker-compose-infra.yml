@@ -110,7 +110,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-oms_pass}
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      #- ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
     command: >
       --innodb-buffer-pool-size=2G
       --innodb-log-file-size=512M
