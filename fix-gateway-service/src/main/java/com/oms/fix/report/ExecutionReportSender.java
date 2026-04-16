@@ -20,16 +20,18 @@ public class ExecutionReportSender {
                 new ExecID(dto.getExecId()),
                 new ExecType(dto.getExecType().getFixValue()),
                 new OrdStatus(mapStatus(dto.getOrdStatus().name())),
-                new Symbol(dto.getSymbol()),
                 new Side(dto.getSide().getFixValue()),
                 new LeavesQty(dto.getLeavesQty() != null ? dto.getLeavesQty().doubleValue() : 0),
                 new CumQty(dto.getCumQty() != null ? dto.getCumQty().doubleValue() : 0),
                 new AvgPx(dto.getAvgPx() != null ? dto.getAvgPx().doubleValue() : 0)
             );
+            if (dto.getSymbol() != null) {
+                report.set(new Symbol(dto.getSymbol()));
+            }
             report.set(new ClOrdID(dto.getClOrdId()));
             if (dto.getLastQty() != null) report.set(new LastQty(dto.getLastQty().doubleValue()));
             if (dto.getLastPx() != null) report.set(new LastPx(dto.getLastPx().doubleValue()));
-            report.set(new TransactTime(new Date()));
+            report.set(new TransactTime(java.time.LocalDateTime.now()));
             if (dto.getText() != null) report.set(new Text(dto.getText()));
 
             SessionID sessionId = parseSessionId(dto.getFixSessionId());
